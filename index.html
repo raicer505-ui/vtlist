@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VTList - Red de Colaboraciones Vtuber</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        coffee: {
+                            900: '#1f1714',
+                            800: '#2b221e',
+                            700: '#3d312c',
+                            600: '#5c4842',
+                            500: '#8c6d62',
+                            300: '#d7ccc8',
+                            100: '#f5ebd6',
+                        },
+                        warm: {
+                            orange: '#d97706',
+                            amber: '#f59e0b',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-coffee-900 text-coffee-100 min-h-screen font-sans antialiased flex flex-col">
+
+    <!-- Navbar -->
+    <header class="bg-coffee-800 border-b border-coffee-700 sticky top-0 z-50 px-4 py-3 shadow-md">
+        <div class="max-w-6xl mx-auto flex justify-between items-center">
+            <div class="flex items-center space-x-2 cursor-pointer" onclick="app.navigate('home')">
+                <i class="fa-solid fa-mug-hot text-warm-amber text-2xl"></i>
+                <span class="text-xl font-bold tracking-wider text-warm-amber">VT<span class="text-coffee-100">List</span></span>
+            </div>
+            
+            <div class="flex items-center space-x-3" id="auth-nav-container">
+                <!-- Se llena dinámicamente según sesión -->
+            </div>
+        </div>
+    </header>
+
+    <!-- Contenido Principal -->
+    <main class="flex-grow max-w-6xl w-full mx-auto p-4" id="main-content">
+        <!-- Las vistas se cargan aquí -->
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-coffee-800 border-t border-coffee-700 text-center py-4 text-xs text-coffee-300 mt-auto">
+        <p>VTList &copy; 2026 - Conectando Vtubers de todo el mundo ☕✨</p>
+    </footer>
+
+    <!-- Modales Globales -->
+    <div id="modal-container"></div>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, getDoc, getDocs, updateDoc, addDoc, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+        const firebaseConfig = {
+          apiKey: "AIzaSyDyBoZpkiyT-rPA-Oejk1EWLChWOg1sly8",
+          authDomain: "vtlist-dd805.firebaseapp.com",
+          projectId: "vtlist-dd805",
+          storageBucket: "vtlist-dd805.firebasestorage.app",
+          messagingSenderId: "124697390551",
+          appId: "1:124697390551:web:75e9751f97ed2d72fc6f92",
+          measurementId: "G-2WBM1QW3R6"
+        };
+
+        const firebaseApp = initializeApp(firebaseConfig);
+        const auth = getAuth(firebaseApp);
+        const db = getFirestore(firebaseApp);
+
+        // Estado global de la App
+        window.appState = {
+            currentUser: null,
+            userData: null,
+            currentView: 'home',
+            profiles: [],
+            messages: [],
+            filter: { search: '', country: 'all', avatar: 'all', onlyCollab: false }
+        };
+
+        // Lógica de Navegación y Renderizado
+        window.app = {
+            navigate(view) {
+                window.appState.currentView = view;
+                render();
+            }
+        };
+
+        // Observar Autenticación
+        onAuthStateChanged(auth, async (user) => {
+            window.appState.currentUser = user;
+            if (user) {
+                const userDoc = await getDoc(doc(db, 'users', user.uid));
+                if (userDoc.exists()) {
+                    window.appState.userData = userDoc.id ? { id: userDoc.id, ...userDoc.data() } : null;
+                } else {
+                    // Perfil por defecto si no existe
+                    const defaultData = {
+                        name: user.email.split('@')[0],
+                        bio: '¡Hola! Soy un Vtuber listo para colaborar.',
+                        country: 'Argentina',
+                        avatarType: 'Humano',
+                        games: 'Mario Kart, Lethal Company, The Spirit and the Mouse',
+                        social: 'https://twitch.tv/',
+                        isAvailable: true,
+                        photoURL: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400'
+                    };
+                    await setDoc(doc(db, 'users', user.uid), defaultData);
+                    window.appState.userData = defaultData;
+                }
+                // Escuchar mensajes
+                setupMessagesListener(user.uid);
+            } else {
+                window.appState.userData = null;
+                window.appState.messages = [];
+            }
+            render();
+            loadProfiles();
+        });
+
+        function setupMessagesListener(uid) {
+            const q = query(collection(db, 'messages'), where('toUid', '==', uid));
+            onSnapshot(q, (snapshot) => {
+                window.appState.messages = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                renderAuthNav();
+            });
+        }
+
+        async function loadProfiles() {
+            try {
+                const querySnapshot = await getDocs(collection(db, 'users'));
+                window.appState.profiles = querySnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                render();
+            } catch (e) {
+                console.error("Error cargando perfiles:", e);
+            }
+        }
+
+        // Renderizado principal
+        function render() {
+            renderAuthNav();
+            const main = document.getElementById('main-content');
+            const view = window.appState.currentView;
+
+            if (view === 'home') {
+                main.innerHTML = renderHome();
+            } else if (view === 'login') {
+                main.innerHTML = renderLogin();
+            } else if (view === 'register') {
+                main.innerHTML = renderRegister();
+            } else if (view === 'profile') {
+                main.innerHTML = renderProfileEditor();
+            } else if (view === 'inbox') {
+                main.innerHTML = renderInbox();
+            }
+        }
+
+        function renderAuthNav() {
+            const container = document.getElementById('auth-nav-container');
+            const user = window.appState.currentUser;
+            const unreadCount = window.appState.messages.filter(m => !m.read).length;
+
+            if (user) {
+                container.innerHTML = `
+                    <button onclick="app.navigate('inbox')" class="relative bg-coffee-700 hover:bg-coffee-600 px-3 py-2 rounded-lg text-sm transition">
+                        <i class="fa-solid fa-bell"></i>
+                        ${unreadCount > 0 ? `<span class="absolute -top-1 -right-1 bg-warm-orange text-white text-xs w-5 h-5 rounded-full flex items-center justify-center">${unreadCount}</span>` : ''}
+                    </button>
+                    <button onclick="app.navigate('profile')" class="bg-coffee-700 hover:bg-coffee-600 px-3 py-2 rounded-lg text-sm flex items-center space-x-2 transition">
+                        <i class="fa-solid fa-user-gear"></i>
+                        <span class="hidden sm:inline">Mi Perfil</span>
+                    </button>
+                    <button onclick="logout()" class="bg-red-900/60 hover:bg-red-800 px-3 py-2 rounded-lg text-sm transition">
+                        <i class="fa-solid fa-right-from-bracket"></i>
+                    </button>
+                `;
+            } else {
+                container.innerHTML = `
+                    <button onclick="app.navigate('login')" class="bg-warm-orange hover:bg-amber-600 px-4 py-2 rounded-lg text-sm font-semibold text-white transition">
+                        Iniciar Sesión
+                    </button>
+                `;
+            }
+        }
+
+        function renderHome() {
+            const state = window.appState;
+            const filtered = state.profiles.filter(p => {
+                const matchesSearch = p.name.toLowerCase().includes(state.filter.search.toLowerCase()) || 
+                                      (p.games && p.games.toLowerCase().includes(state.filter.search.toLowerCase()));
+                const matchesCountry = state.filter.country === 'all' || p.country === state.filter.country;
+                const matchesAvatar = state.filter.avatar === 'all' || p.avatarType === state.filter.avatar;
+                const matchesCollab = !state.filter.onlyCollab || p.isAvailable;
+                return matchesSearch && matchesCountry && matchesAvatar && matchesCollab;
+            });
+
+            return `
+                <div class="space-y-6">
+                    <!-- Hero Banner -->
+                    <div class="bg-gradient-to-r from-coffee-800 to-coffee-700 p-6 rounded-2xl border border-coffee-600 shadow-xl text-center md:text-left flex flex-col md:flex-row justify-between items-center gap-4">
+                        <div>
+                            <h1 class="text-2xl md:text-3xl font-bold text-warm-amber mb-2">Encuentra Vtubers para Collab ☕</h1>
+                            <p class="text-coffee-300 text-sm md:text-base">Conecta con otros creadores, revisa sus juegos en común y pacta directos fácilmente.</p>
+                        </div>
+                        ${!state.currentUser ? `
+                            <button onclick="app.navigate('register')" class="bg-warm-orange hover:bg-amber-600 text-white font-bold px-6 py-3 rounded-xl shadow-lg transition whitespace-nowrap">
+                                Crear mi perfil Vtuber
+                            </button>
+                        ` : ''}
+                    </div>
+
+                    <!-- Filtros y Buscador -->
+                    <div class="bg-coffee-800 p-4 rounded-xl border border-coffee-700 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+                        <div class="relative">
+                            <i class="fa-solid fa-magnifying-glass absolute left-3 top-3.5 text-coffee-500"></i>
+                            <input type="text" id="searchInput" placeholder="Buscar por nombre o juego..." value="${state.filter.search}" oninput="updateFilter('search', this.value)" class="w-full bg-coffee-900 border border-coffee-600 rounded-lg pl-10 pr-3 py-2 text-sm text-coffee-100 focus:outline-none focus:border-warm-orange">
+                        </div>
+                        <div>
+                            <select id="countryFilter" onchange="updateFilter('country', this.value)" class="w-full bg-coffee-900 border border-coffee-600 rounded-lg px-3 py-2 text-sm text-coffee-100 focus:outline-none focus:border-warm-orange">
+                                <option value="all">🌍 Todos los países</option>
+                                <option value="Argentina" ${state.filter.country === 'Argentina' ? 'selected' : ''}>Argentina</option>
+                                <option value="México" ${state.filter.country === 'México' ? 'selected' : ''}>México</option>
+                                <option value="España" ${state.filter.country === 'España' ? 'selected' : ''}>España</option>
+                                <option value="Chile" ${state.filter.country === 'Chile' ? 'selected' : ''}>Chile</option>
+                                <option value="Colombia" ${state.filter.country === 'Colombia' ? 'selected' : ''}>Colombia</option>
+                            </select>
+                        </div>
+                        <div>
+                            <select id="avatarFilter" onchange="updateFilter('avatar', this.value)" class="w-full bg-coffee-900 border border-coffee-600 rounded-lg px-3 py-2 text-sm text-coffee-100 focus:outline-none focus:border-warm-orange">
+                                <option value="all">🎭 Todos los avatares</option>
+                                <option value="Humano" ${state.filter.avatar === 'Humano' ? 'selected' : ''}>Humano</option>
+                                <option value="2D" ${state.filter.avatar === '2D' ? 'selected' : ''}>2D</option>
+                                <option value="3D" ${state.filter.avatar === '3D' ? 'selected' : ''}>3D</option>
+                                <option value="PNGtuber" ${state.filter.avatar === 'PNGtuber' ? 'selected' : ''}>PNGtuber</option>
+                            </select>
+                        </div>
+                        <div class="flex items-center justify-center bg-coffee-900 border border-coffee-600 rounded-lg px-3 py-2">
+                            <label class="flex items-center space-x-2 cursor-pointer text-sm">
+                                <input type="checkbox" id="collabSwitchFilter" ${state.filter.onlyCollab ? 'checked' : ''} onchange="updateFilter('onlyCollab', this.checked)" class="w-4 h-4 text-warm-orange rounded focus:ring-warm-orange bg-coffee-800 border-coffee-600">
+                                <span class="text-warm-amber font-medium">✨ Solo disponibles</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Grilla de Perfiles -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                        ${filtered.length === 0 ? `
+                            <div class="col-span-full text-center py-12 text-coffee-500">
+                                <i class="fa-solid fa-mug-saucer text-4xl mb-3"></i>
+                                <p>No se encontraron Vtubers con esos filtros.</p>
+                            </div>
+                        ` : filtered.map(p => `
+                            <div class="bg-coffee-800 border border-coffee-700 rounded-2xl overflow-hidden shadow-lg flex flex-col justify-between transition hover:border-coffee-500">
+                                <div>
+                                    <div class="h-24 bg-gradient-to-r from-coffee-600 to-coffee-700 relative">
+                                        ${p.isAvailable ? '<span class="absolute top-2 right-2 bg-green-600 text-white text-xs px-2.5 py-1 rounded-full font-bold shadow animate-pulse"><i class="fa-solid fa-circle text-[8px] mr-1"></i> Disponible Collab</span>' : ''}
+                                    </div>
+                                    <div class="px-5 -mt-10 flex items-end justify-between">
+                                        <img src="${p.photoURL \vert{}\vert{} 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400'}" alt="${p.name}" class="w-20 h-20 rounded-full border-4 border-coffee-800 object-cover bg-coffee-700">
+                                        <span class="text-xs bg-coffee-700 px-2.5 py-1 rounded-lg text-coffee-300 font-medium">${p.country || 'Global'}</span>
+                                    </div>
+                                    <div class="p-5 space-y-3">
+                                        <div>
+                                            <h3 class="text-lg font-bold text-coffee-100 flex items-center gap-2">
+                                                ${p.name}
+                                                <span class="text-xs font-normal bg-coffee-700 px-2 py-0.5 rounded text-warm-amber">${p.avatarType || 'Avatar'}</span>
+                                            </h3>
+                                            <p class="text-xs text-coffee-400 mt-1 line-clamp-2">${p.bio || 'Sin descripción.'}</p>
+                                        </div>
+                                        <div>
+                                            <p class="text-xs font-semibold text-coffee-300 mb-1"><i class="fa-solid fa-gamepad mr-1 text-warm-amber"></i> Juegos de Collab:</p>
+                                            <div class="flex flex-wrap gap-1">
+                                                ${(p.games || '').split(',').map(g => `<span class="text-[10px] bg-coffee-900 border border-coffee-700 px-2 py-0.5 rounded text-coffee-300">${g.trim()}</span>`).join('')}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="p-5 pt-0">
+                                    <button onclick="openCollabModal('${p.id}', '${p.name}')" class="w-full bg-coffee-700 hover:bg-warm-orange text-coffee-100 hover:text-white font-semibold py-2 rounded-xl text-sm transition flex items-center justify-center gap-2">
+                                        <i class="fa-solid fa-handshake"></i> Proponer Collab
+                                    </button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderLogin() {
+            return `
+                <div class="max-w-md mx-auto bg-coffee-800 border border-coffee-700 p-8 rounded-2xl shadow-xl mt-10">
+                    <h2 class="text-2xl font-bold text-warm-amber mb-6 text-center"><i class="fa-solid fa-right-to-bracket mr-2"></i> Iniciar Sesión</h2>
+                    <form onsubmit="handleLogin(event)" class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-coffee-300 mb-1">Correo Electrónico</label>
+                            <input type="email" id="loginEmail" required class="w-full bg-coffee-900 border border-coffee-600 rounded-lg p-3 text-sm text-coffee-100 focus:outline-none focus:border-warm-orange">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-coffee-300 mb-1">Contraseña</label>
+                            <input type="password" id="loginPassword" required class="w-full bg-coffee-900 border border-coffee-600 rounded-lg p-3 text-sm text-coffee-100 focus:outline-none focus:border-warm-orange">
+                        </div>
+                        <button type="submit" class="w-full bg-warm-orange hover:bg-amber-600 text-white font-bold py-3 rounded-xl transition">Entrar</button>
+                    </form>
+                    <p class="text-center text-xs text-coffee-400 mt-4">
+                        ¿No tienes cuenta? <a href="#" onclick="app.navigate('register')" class="text-warm-amber hover:underline">Regístrate aquí</a>
+                    </p>
+                </div>
+            `;
+        }
+
+        function renderRegister() {
+            return `
+                <div class="max-w-md mx-auto bg-coffee-800 border border-coffee-700 p-8 rounded-2xl shadow-xl mt-10">
+                    <h2 class="text-2xl font-bold text-warm-amber mb-6 text-center"><i class="fa-solid fa-user-plus mr-2"></i> Crear Cuenta VTList</h2>
+                    <form onsubmit="handleRegister(event)" class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-coffee-300 mb-1">Correo Electrónico</label>
+                            <input type="email" id="regEmail" required class="w-full bg-coffee-900 border border-coffee-600 rounded-lg p-3 text-sm text-coffee-100 focus:outline-none focus:border-warm-orange">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-coffee-300 mb-1">Contraseña (mínimo 6 caracteres)</label>
+                            <input type="password" id="regPassword" required class="w-full bg-coffee-900 border border-coffee-600 rounded-lg p-3 text-sm text-coffee-100 focus:outline-none focus:border-warm-orange">
+                        </div>
+                        <button type="submit" class="w-full bg-warm-orange hover:bg-amber-600 text-white font-bold py-3 rounded-xl transition">Registrarse</button>
+                    </form>
+                    <p class="text-center text-xs text-coffee-400 mt-4">
+                        ¿Ya tienes cuenta? <a href="#" onclick="app.navigate('login')" class="text-warm-amber hover:underline">Inicia sesión</a>
+                    </p>
+                </div>
+            `;
+        }
+
+        function renderProfileEditor() {
+            const data = window.appState.userData || {};
+            return `
+                <div class="max-w-xl mx-auto bg-coffee-800 border border-coffee-700 p-8 rounded-2xl shadow-xl mt-6">
+                    <h2 class="text-2xl font-bold text-warm-amber mb-6"><i class="fa-solid fa-user-pen mr-2"></i> Editar Perfil Vtuber</h2>
+                    <form onsubmit="handleSaveProfile(event)" class="space-y-4">
+                        <div class="flex items-center justify-between bg-coffee-900 p-4 rounded-xl border border-coffee-600">
+                            <div>
+                                <span class="font-bold text-coffee-100 block">Disponibilidad para Collab</span>
+                                <span class="text-xs text-coffee-400">Actívalo para aparecer en destacado y recibir propuestas</span>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="profileIsAvailable" ${data.isAvailable ? 'checked' : ''} class="sr-only peer">
+                                <div class="w-11 h-6 bg-coffee-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-coffee-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                            </label>
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-coffee-300 mb-1">Nombre / Seudónimo</label>
+                                <input type="text" id="profileName" value="${data.name || ''}" required class="w-full bg-coffee-900 border border-coffee-600 rounded-lg p-3 text-sm text-coffee-100">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-coffee-300 mb-1">País</label>
+                                <select id="profileCountry" class="w-full bg-coffee-900 border border-coffee-600 rounded-lg p-3 text-sm text-coffee-100">
+                                    <option value="Argentina" ${data.country === 'Argentina' ? 'selected' : ''}>Argentina</option>
+                                    <option value="México" ${data.country === 'México' ? 'selected' : ''}>México</option>
+                                    <option value="España" ${data.country === 'España' ? 'selected' : ''}>España</option>
+                                    <option value="Chile" ${data.country === 'Chile' ? 'selected' : ''}>Chile</option>
+                                    <option value="Colombia" ${data.country === 'Colombia' ? 'selected' : ''}>Colombia</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-coffee-300 mb-1">Tipo de Avatar</label>
+                                <select id="profileAvatarType" class="w-full bg-coffee-900 border border-coffee-600 rounded-lg p-3 text-sm text-coffee-100">
+                                    <option value="Humano" ${data.avatarType === 'Humano' ? 'selected' : ''}>Humano</option>
+                                    <option value="2D" ${data.avatarType === '2D' ? 'selected' : ''}>2D</option>
+                                    <option value="3D" ${data.avatarType === '3D' ? 'selected' : ''}>3D</option>
+                                    <option value="PNGtuber" ${data.avatarType === 'PNGtuber' ? 'selected' : ''}>PNGtuber</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-coffee-300 mb-1">Foto de Perfil (URL)</label>
+                                <input type="url" id="profilePhoto" value="${data.photoURL || ''}" class="w-full bg-coffee-900 border border-coffee-600 rounded-lg p-3 text-sm text-coffee-100">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-coffee-300 mb-1">Juegos Cooperativos (separados por comas)</label>
+                            <input type="text" id="profileGames" value="${data.games || ''}" placeholder="Ej: Mario Kart, Lethal Company, The Spirit and the Mouse" class="w-full bg-coffee-900 border border-coffee-600 rounded-lg p-3 text-sm text-coffee-100">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-coffee-300 mb-1">Biografía</label>
+                            <textarea id="profileBio" rows="3" class="w-full bg-coffee-900 border border-coffee-600 rounded-lg p-3 text-sm text-coffee-100">${data.bio || ''}</textarea>
+                        </div>
+                        <div class="flex gap-3 pt-2">
+                            <button type="submit" class="flex-1 bg-warm-orange hover:bg-amber-600 text-white font-bold py-3 rounded-xl transition">Guardar Cambios</button>
+                            <button type="button" onclick="app.navigate('home')" class="bg-coffee-700 hover:bg-coffee-600 px-5 py-3 rounded-xl transition text-sm">Cancelar</button>
+                        </div>
+                    </form>
+                </div>
+            `;
+        }
+
+        function renderInbox() {
+            const messages = window.appState.messages;
+            return `
+                <div class="max-w-2xl mx-auto space-y-4">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold text-warm-amber"><i class="fa-solid fa-inbox mr-2"></i> Buzón de Collabs</h2>
+                        <button onclick="app.navigate('home')" class="text-xs bg-coffee-700 px-3 py-2 rounded-lg hover:bg-coffee-600">Volver al inicio</button>
+                    </div>
+                    ${messages.length === 0 ? `
+                        <div class="bg-coffee-800 border border-coffee-700 p-8 rounded-2xl text-center text-coffee-400">
+                            <i class="fa-solid fa-envelope-open text-4xl mb-3"></i>
+                            <p>No tienes propuestas de colaboración todavía.</p>
+                        </div>
+                    ` : messages.map(m => `
+                        <div class="bg-coffee-800 border border-coffee-700 p-5 rounded-xl shadow space-y-2">
+                            <div class="flex justify-between items-center">
+                                <span class="font-bold text-warm-amber text-sm"><i class="fa-solid fa-user mr-1"></i> ${m.fromName} quiere una collab contigo!</span>
+                                <span class="text-[10px] text-coffee-400">${new Date(m.timestamp?.toDate()).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                            </div>
+                            <p class="text-sm bg-coffee-900 p-3 rounded-lg border border-coffee-700 text-coffee-100">"${m.message}"</p>
+                            <div class="flex justify-end space-x-2 pt-1">
+                                <a href="mailto:${m.fromEmail || '#'}" class="bg-warm-orange hover:bg-amber-600 text-white px-4 py-1.5 rounded-lg text-xs font-semibold transition"><i class="fa-solid fa-envelope mr-1"></i> Responder por Correo</a>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        // Modales
+        window.openCollabModal = function(targetUid, targetName) {
+            if (!window.appState.currentUser) {
+                alert("Debes iniciar sesión para proponer una colaboración.");
+                app.navigate('login');
+                return;
+            }
+            const modal = document.getElementById('modal-container');
+            modal.innerHTML = `
+                <div class="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+                    <div class="bg-coffee-800 border border-coffee-700 p-6 rounded-2xl max-w-md w-full shadow-2xl space-y-4">
+                        <h3 class="text-xl font-bold text-warm-amber">Proponer Collab a ${targetName}</h3>
+                        <p class="text-xs text-coffee-300">Envía un mensaje rápido para pactar disponibilidad horaria o proponer un juego.</p>
+                        <textarea id="collabMsgText" rows="4" placeholder="¡Hola! Vi que estás disponible para jugar Lethal Company este fin de semana..." class="w-full bg-coffee-900 border border-coffee-600 rounded-lg p-3 text-sm text-coffee-100 focus:outline-none focus:border-warm-orange"></textarea>
+                        <div class="flex space-x-3">
+                            <button onclick="sendCollabProposal('${targetUid}')" class="flex-1 bg-warm-orange hover:bg-amber-600 text-white font-bold py-2.5 rounded-xl text-sm transition">Enviar Propuesta</button>
+                            <button onclick="closeModal()" class="bg-coffee-700 hover:bg-coffee-600 px-4 py-2.5 rounded-xl text-sm transition">Cancelar</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+        window.closeModal = function() {
+            document.getElementById('modal-container').innerHTML = '';
+        };
+
+        window.sendCollabProposal = async function(targetUid) {
+            const text = document.getElementById('collabMsgText').value;
+            if (!text.trim()) {
+                alert("Por favor escribe un mensaje.");
+                return;
+            }
+            try {
+                const myData = window.appState.userData;
+                const myUser = window.appState.currentUser;
+                await addDoc(collection(db, 'messages'), {
+                    toUid: targetUid,
+                    fromUid: myUser.uid,
+                    fromName: myData?.name || myUser.email.split('@')[0],
+                    fromEmail: myUser.email,
+                    message: text,
+                    timestamp: new Date(),
+                    read: false
+                });
+                alert("¡Propuesta enviada con éxito! El usuario recibirá la notificación.");
+                closeModal();
+            } catch (e) {
+                console.error(e);
+                alert("Error al enviar la propuesta.");
+            }
+        };
+
+        window.updateFilter = function(key, value) {
+            window.appState.filter[key] = value;
+            render();
+        };
+
+        // Acciones de Auth y Perfil
+        window.handleLogin = async function(e) {
+            e.preventDefault();
+            const email = document.getElementById('loginEmail').value;
+            const pass = document.getElementById('loginPassword').value;
+            try {
+                await signInWithEmailAndPassword(auth, email, pass);
+                app.navigate('home');
+            } catch (err) {
+                alert("Error al iniciar sesión: " + err.message);
+            }
+        };
+
+        window.handleRegister = async function(e) {
+            e.preventDefault();
+            const email = document.getElementById('regEmail').value;
+            const pass = document.getElementById('regPassword').value;
+            try {
+                await createUserWithEmailAndPassword(auth, email, pass);
+                app.navigate('profile');
+            } catch (err) {
+                alert("Error al registrarse: " + err.message);
+            }
+        };
+
+        window.handleSaveProfile = async function(e) {
+            e.preventDefault();
+            const user = window.appState.currentUser;
+            if (!user) return;
+
+            const updatedData = {
+                name: document.getElementById('profileName').value,
+                country: document.getElementById('profileCountry').value,
+                avatarType: document.getElementById('profileAvatarType').value,
+                photoURL: document.getElementById('profilePhoto').value,
+                games: document.getElementById('profileGames').value,
+                bio: document.getElementById('profileBio').value,
+                isAvailable: document.getElementById('profileIsAvailable').checked
+            };
+
+            try {
+                await setDoc(doc(db, 'users', user.uid), updatedData, { merge: true });
+                window.appState.userData = updatedData;
+                alert("¡Perfil guardado con éxito!");
+                loadProfiles();
+                app.navigate('home');
+            } catch (err) {
+                alert("Error al guardar perfil: " + err.message);
+            }
+        };
+
+        window.logout = function() {
+            signOut(auth).then(() => app.navigate('home'));
+        };
+    </script>
+</body>
+</html>
